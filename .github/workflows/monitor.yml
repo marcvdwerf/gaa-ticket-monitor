@@ -1,0 +1,75 @@
+name: GAA Ticket Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub Actions only guarantees scheduled workflows as often as every 5 minutes.
+    # To approximate 1-minute checks, this workflow runs a 5-pass burst loop once every 5 minutes.
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gaa-ticket-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TM_API_KEY: ${{ secrets.TM_API_KEY }}
+      EVENTBRITE_TOKEN: ${{ secrets.EVENTBRITE_TOKEN }}
+      TRACKED_KEYWORDS: ${{ secrets.TRACKED_KEYWORDS }}
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore default keywords when secret is absent
+        shell: bash
+        run: |
+          if [ -z "$TRACKED_KEYWORDS" ]; then
+            echo "TRACKED_KEYWORDS=Dublin,Kerry,Mayo,Cork,Galway,All-Ireland,Semi Final,Final,Hurling,Football,Croke Park,Leinster,Munster,Ulster" >> $GITHUB_ENV
+          fi
+
+      - name: Run monitor burst loop
+        shell: bash
+        run: |
+          set -euo pipefail
+          for minute in 1 2 3 4 5; do
+            echo "===== Monitor pass ${minute}/5 at $(date -u +'%Y-%m-%d %H:%M:%S UTC') ====="
+            python main.py
+            if [ "$minute" -lt 5 ]; then
+              sleep 60
+            fi
+          done
+
+      - name: Commit updated seen events store
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- seen_events.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add seen_events.json
+            git commit -m "chore: update seen events store"
+            git push
+          else
+            echo "No seen_events.json changes to commit."
+          fi
