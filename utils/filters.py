@@ -25,8 +25,76 @@ _DROP_QUERY_PARAMS = {
     "ref",
 }
 
-
 _WHITESPACE_RE = re.compile(r"\s+")
+
+# GAA sport termen - event MOET minstens één van deze bevatten
+_GAA_SPORT_TERMS = [
+    "hurling",
+    "gaelic football",
+    "gaa",
+    "all-ireland",
+    "all ireland",
+    "leinster championship",
+    "munster championship",
+    "ulster championship",
+    "connacht championship",
+    "leinster final",
+    "munster final",
+    "ulster final",
+    "connacht final",
+    "allianz league",
+    "national league",
+    "gaa ticket",
+    "county championship",
+    "provincial final",
+    "croke park",
+    "páirc uí chaoimh",
+    "semple stadium",
+    "machale park",
+    "fitzgerald stadium",
+    "casement park",
+    "gaelic",
+    "intercounty",
+    "inter-county",
+]
+
+# Woorden die bijna zeker GEEN GAA wedstrijd zijn
+_NON_GAA_EXCLUSIONS = [
+    "concert",
+    "comedy",
+    "festival",
+    "exhibition",
+    "conference",
+    "wedding",
+    "graduation",
+    "cinema",
+    "theatre",
+    "theater",
+    "museum",
+    "tour guide",
+    "sightseeing",
+    "pub crawl",
+    "night out",
+    "dj",
+    "stand-up",
+    "stand up",
+    "open mic",
+    "craft beer",
+    "wine tasting",
+    "yoga",
+    "pilates",
+    "fitness class",
+    "art exhibition",
+    "networking",
+    "business event",
+    "charity gala",
+]
+
+# Platforms die altijd GAA-specifiek zijn - geen extra check nodig
+_TRUSTED_GAA_PLATFORMS = {
+    "gaa official",
+    "gaa",
+}
 
 
 def utc_now_iso() -> str:
@@ -81,9 +149,43 @@ def fuzzy_contains_keyword(text: str, keywords: list[str] | None = None) -> bool
     return False
 
 
+def is_gaa_sport_event(event: dict[str, Any]) -> bool:
+    """
+    Controleert of een event echt een GAA hurling of Gaelic football wedstrijd is.
+    Events van het officiële GAA platform worden altijd vertrouwd.
+    Voor andere platforms wordt gecheckt of er een GAA sport term in staat
+    en of er geen duidelijke uitsluitingswoorden in staan.
+    """
+    platform = normalize_text(str(event.get("platform", ""))).lower()
+
+    # Officieel GAA platform altijd vertrouwen
+    if any(trusted in platform for trusted in _TRUSTED_GAA_PLATFORMS):
+        return True
+
+    searchable = normalize_text(" ".join([
+        str(event.get("name", "")),
+        str(event.get("venue", "")),
+        str(event.get("competition", "")),
+        str(event.get("status", "")),
+    ])).lower()
+
+    # Check op uitsluitingswoorden
+    for exclusion in _NON_GAA_EXCLUSIONS:
+        if exclusion in searchable:
+            return False
+
+    # Check of er minstens één GAA sport term in staat
+    for term in _GAA_SPORT_TERMS:
+        if term in searchable:
+            return True
+
+    return False
+
+
 def matches_keywords(event: dict[str, Any], keywords: list[str] | None = None) -> bool:
     if not REQUIRE_MATCHING_KEYWORDS:
         return True
+
     searchable = " ".join(
         [
             str(event.get("name", "")),
@@ -93,7 +195,13 @@ def matches_keywords(event: dict[str, Any], keywords: list[str] | None = None) -
             str(event.get("platform", "")),
         ]
     )
-    return fuzzy_contains_keyword(searchable, keywords=keywords)
+
+    # Eerst keyword check
+    if not fuzzy_contains_keyword(searchable, keywords=keywords):
+        return False
+
+    # Dan GAA sport check
+    return is_gaa_sport_event(event)
 
 
 def stable_event_id(platform_slug: str, name: str, date_text: str, venue: str) -> str:
